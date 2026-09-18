@@ -1,359 +1,249 @@
-/*
-[] - IMPLEMENTAR DEBOUNCE NOS BOTOES !!!
-[] - ALTERAR PARA USO DO MILIS !!!
-[x] - TIRAR O ULTIMO BOTAO !!!
-[] - MUDAR A FUNCAO ANIMACAO DE INICIO PARA USAR MILLIS E NAO TRAVAR O INICIO DO CODIGO !!!
-[] - MUDAR VARIAVEIS CONSTANTES PARA #DEFINE (MENOS CONSUMO DE MEMORIA)
-*/
+// --- Mapeamento de Pinos ---
+#define LED_VERDE    4
+#define LED_AZUL     5
+#define LED_VERMELHO 6
+#define LED_AMARELO  7
 
-const int led_verde = 4;
-const int led_azul = 5;
-const int led_vermelho = 6;
-const int led_amarelo = 7;
+#define BTN_VERDE    8
+#define BTN_AZUL     9
+#define BTN_VERMELHO 10
+#define BTN_AMARELO  11
+#define BTN_INICIAR  2
 
-const int leds[] = {led_verde, led_azul, led_vermelho, led_amarelo};
-const int total_leds = sizeof(leds)/sizeof(leds[0]);
+#define PINO_BUZZER  A4
 
-const int btn_verde = 8;
-const int btn_azul = 9;
-const int btn_vermelho = 10;
-const int btn_amarelo = 11;
-const int btn_iniciar = 2;
+// --- Frequências de Áudio ---
+#define SOM_VERDE    440
+#define SOM_AZUL     494
+#define SOM_VERMELHO 523
+#define SOM_AMARELO  587
+#define SOM_ERRO     250
 
-const int pino_buzzer = A4;
-const int som_verde = 440;
-const int som_azul = 494;
-const int som_vermelho = 523;
-const int som_amarelo = 587;
-const int som_erro = 250;
+#define NOTA_DO      262
+#define NOTA_RE      294
+#define NOTA_MI      330
+#define NOTA_FA      349
+#define NOTA_SOL     392
 
-const int notaDo = 262; // Dó
-const int notaRe = 294; // Ré
-const int notaMi = 330; // Mi
-const int notaFa = 349; // Fá
-const int notaSol = 392; // Sol
+// --- Configurações Gerais ---
+#define TEMPO_DEBOUNCE 50 // ms
 
-char modo = 'i';
+const int leds[] = {LED_VERDE, LED_AZUL, LED_VERMELHO, LED_AMARELO};
+const int sons[] = {SOM_VERDE, SOM_AZUL, SOM_VERMELHO, SOM_AMARELO};
+const int botoesPinos[] = {BTN_VERDE, BTN_AZUL, BTN_VERMELHO, BTN_AMARELO};
+const int totalLeds = 4;
 
+// Estrutura para controle de debounce de cada botão
+struct Botao {
+  bool estadoAnterior;
+  bool estadoEstavel;
+  unsigned long ultimoTempoMudanca;
+};
+
+Botao botoes[4] = {
+  {HIGH, HIGH, 0},
+  {HIGH, HIGH, 0},
+  {HIGH, HIGH, 0},
+  {HIGH, HIGH, 0}
+};
+
+char modo = 'i'; // 'i' = Inicio, 'p' = Tocar Sequencia, 'r' = Resposta Jogador, 'e' = Erro
 int rodada = 0;
+int ordemLeds[25];
+int passoExibicao = 0;
+int passoJogador = 0;
 
-int ordem_leds[25];
-int tamanho_ordem_leds = sizeof(ordem_leds)/sizeof(ordem_leds[0]);
+unsigned long tempoAnterior = 0;
+bool estadoLedsTocando = false;
 
-void iniciarJogo();
-void pistar(int delay_);
-void animacao_inicio();
+// Controle da Animação de Início sem delay
+int passoAnimacao = 0;
+unsigned long tempoAnimacao = 0;
 
 void setup() {
-  pinMode(led_verde, OUTPUT);
-  pinMode(led_azul, OUTPUT);
-  pinMode(led_vermelho, OUTPUT);
-  pinMode(led_amarelo, OUTPUT);
-
-  pinMode(btn_verde, INPUT_PULLUP);
-  pinMode(btn_azul, INPUT_PULLUP);
-  pinMode(btn_vermelho, INPUT_PULLUP);
-  pinMode(btn_amarelo, INPUT_PULLUP);
-
-  pinMode(btn_iniciar, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(btn_iniciar), iniciarJogo, FALLING);
-
-  for(int i = 0; i < tamanho_ordem_leds; i++) {
-    ordem_leds[i] = -1;
+  for (int i = 0; i < totalLeds; i++) {
+    pinMode(leds[i], OUTPUT);
+    pinMode(botoesPinos[i], INPUT_PULLUP);
   }
-  
+
+  pinMode(PINO_BUZZER, OUTPUT);
+  pinMode(BTN_INICIAR, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_INICIAR), iniciarJogo, FALLING);
+
+  for (int i = 0; i < 25; i++) {
+    ordemLeds[i] = -1;
+  }
+
+  randomSeed(analogRead(A0));
   Serial.begin(9600);
 }
 
 void loop() {
-  if (modo == 'i') {
-    if (digitalRead(btn_verde) == LOW || digitalRead(btn_azul) == LOW || digitalRead(btn_vermelho) == LOW || digitalRead(btn_amarelo) == LOW) {
-      modo = 'p';
-      delay(500);
-    }
-  } else if(modo == 'p') {
-    int valor = random(4, 8);
-    ordem_leds[rodada] = valor;
-    
-    for(int i = 0; i <= rodada; i++) {
-      if (ordem_leds[i] != -1) {
-      	digitalWrite(ordem_leds[i], HIGH);
-        
-        if(ordem_leds[i] == led_verde){
-        	tone(pino_buzzer, som_verde);
-        } else if (ordem_leds[i] == led_azul){
-        	tone(pino_buzzer, som_azul);
-        } else if (ordem_leds[i] == led_vermelho){
-        	tone(pino_buzzer, som_vermelho);
-        } else if (ordem_leds[i] == led_amarelo){
-        	tone(pino_buzzer, som_amarelo);
-        }
-        
-        delay(1000);
-        digitalWrite(ordem_leds[i], LOW);
-        noTone(pino_buzzer);
-        delay(1000);
+  unsigned long tempoAtual = millis();
+
+  switch (modo) {
+    case 'i': // Animação do menu inicial (não bloqueante)
+      executarAnimacaoInicio(tempoAtual);
+      if (lerBotoesComDebounce() != -1) {
+        iniciarJogo();
       }
-    }
-    
-    modo = 'r';
-    
-  } else if (modo == 'r') {
-    int botoes_selecionados[rodada + 1];
-	int tm_botoes_selecionados = sizeof(botoes_selecionados)/sizeof(botoes_selecionados[0]);
-    int index = 0;
-    
-    
-    while (index <= rodada) {
-      if (digitalRead(btn_verde) == LOW) {
-        botoes_selecionados[index] = led_verde;
-        tone(pino_buzzer, som_verde);
-        delay(500);
-        noTone(pino_buzzer);
-        index++;
-      	delay(300);
-      }
-      if (digitalRead(btn_azul) == LOW) {
-        botoes_selecionados[index] = led_azul;
-        tone(pino_buzzer, som_azul);
-        delay(500);
-        noTone(pino_buzzer);
-        index++;
-        delay(300);
-      }
-      if (digitalRead(btn_vermelho) == LOW) {
-        botoes_selecionados[index] = led_vermelho;
-        tone(pino_buzzer, som_vermelho);
-        delay(500);
-        noTone(pino_buzzer);
-        index++;
-        delay(300);
-      }
-      if (digitalRead(btn_amarelo) == LOW) {
-        botoes_selecionados[index] = led_amarelo;
-        tone(pino_buzzer, som_amarelo);
-        delay(500);
-        noTone(pino_buzzer);
-        index++;
-        delay(300);
-      }
-      
-    } 
-    
-    for(int i = 0; i <= rodada; i++) {
-      if (botoes_selecionados[i] != ordem_leds[i]) {
-      	piscar(150);
-        tone(pino_buzzer, som_erro);
-        delay(1000);
-        noTone(pino_buzzer);
-        modo = 'i';
-      }
-    }
-    
-    if (modo != 'i') {
-    	rodada++;
-    	modo = 'p';
-    } else {
-    	rodada = 0;
-      	
-      	for(int i = 0; i < tamanho_ordem_leds; i++) {
-  			ordem_leds[i] = -1;
-    	}
-      
-     	delay(4000);
-    }
-    
-  } else {
-    animacao_inicio();
+      break;
+
+    case 'p': // Toca a sequência gerada
+      executarSequencia(tempoAtual);
+      break;
+
+    case 'r': // Resposta do jogador com leitura com debounce
+      executarRespostaJogador();
+      break;
+
+    case 'e': // Tratamento de erro/fim de jogo
+      executarErro(tempoAtual);
+      break;
   }
 }
 
+// ISR para a interrupção no pino 2
 void iniciarJogo() {
-  if(modo == 'i'){
-  	modo = 'p';
+  if (modo == 'i' || modo == 'e') {
+    desligarLeds();
+    noTone(PINO_BUZZER);
+    rodada = 0;
+    passoExibicao = 0;
+    passoJogador = 0;
+    for (int i = 0; i < 25; i++) ordemLeds[i] = -1;
+    modo = 'p';
   }
 }
 
-void piscar(int delay_) {  
-	for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
+// Leitura de botões com algoritmo de Debounce não-bloqueante
+int lerBotoesComDebounce() {
+  unsigned long agora = millis();
+  
+  for (int i = 0; i < totalLeds; i++) {
+    bool leituraAtual = digitalRead(botoesPinos[i]);
+
+    if (leituraAtual != botoes[i].estadoAnterior) {
+      botoes[i].ultimoTempoMudanca = agora;
+      botoes[i].estadoAnterior = leituraAtual;
     }
-    delay(delay_);
-    
-    for(int i = total_leds - 1; i >= 0; i--) {
-    	digitalWrite(leds[i], LOW);
+
+    if ((agora - botoes[i].ultimoTempoMudanca) > TEMPO_DEBOUNCE) {
+      if (leituraAtual != botoes[i].estadoEstavel) {
+        botoes[i].estadoEstavel = leituraAtual;
+
+        // Borda de descida (botão pressionado)
+        if (botoes[i].estadoEstavel == LOW) {
+          return i; // Retorna o índice do botão (0 a 3)
+        }
+      }
     }
-    delay(delay_);
-  	for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
-    }
-    delay(delay_);
-    
-    for(int i = total_leds - 1; i >= 0; i--) {
-    	digitalWrite(leds[i], LOW);
-    }
-    delay(delay_);
-  	for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
-    }
-    delay(delay_);
-    
-    for(int i = total_leds - 1; i >= 0; i--) {
-    	digitalWrite(leds[i], LOW);
-    }
-    delay(delay_);
+  }
+  return -1; // Nenhum botão foi pressionado
 }
 
-void animacao_inicio(){
-  tone(pino_buzzer, notaDo, 300);//Frequência e duração da nota Dó
-  digitalWrite(led_verde, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
+void executarSequencia(unsigned long tempoAtual) {
+  if (passoExibicao == 0 && !estadoLedsTocando) {
+    ordemLeds[rodada] = random(0, 4); // Armazena índice (0-3)
+  }
+
+  if (!estadoLedsTocando) {
+    if (tempoAtual - tempoAnterior >= 300) { // Intervalo entre notas
+      tempoAnterior = tempoAtual;
+      int ledIndex = ordemLeds[passoExibicao];
+      
+      digitalWrite(leds[ledIndex], HIGH);
+      tone(PINO_BUZZER, sons[ledIndex]);
+      estadoLedsTocando = true;
+    }
+  } else {
+    if (tempoAtual - tempoAnterior >= 600) { // Duração do som/led
+      tempoAnterior = tempoAtual;
+      int ledIndex = ordemLeds[passoExibicao];
+      
+      digitalWrite(leds[ledIndex], LOW);
+      noTone(PINO_BUZZER);
+      estadoLedsTocando = false;
+      
+      passoExibicao++;
+      if (passoExibicao > rodada) {
+        passoExibicao = 0;
+        passoJogador = 0;
+        modo = 'r'; // Alterna para aguardar o jogador
+      }
+    }
+  }
+}
+
+void executarRespostaJogador() {
+  int botaoPressionado = lerBotoesComDebounce();
+
+  if (botaoPressionado != -1) {
+    digitalWrite(leds[botaoPressionado], HIGH);
+    tone(PINO_BUZZER, sons[botaoPressionado]);
+    delay(200); // Feedback visual e sonoro curto ao pressionar
+    digitalWrite(leds[botaoPressionado], LOW);
+    noTone(PINO_BUZZER);
+
+    if (botaoPressionado == ordemLeds[passoJogador]) {
+      passoJogador++;
+      if (passoJogador > rodada) {
+        rodada++;
+        if (rodada >= 25) {
+          modo = 'i'; // Limite máximo atingido
+        } else {
+          modo = 'p';
+          tempoAnterior = millis();
+        }
+      }
+    } else {
+      modo = 'e'; // Jogada incorreta
+      tempoAnterior = millis();
+    }
+  }
+}
+
+void executarErro(unsigned long tempoAtual) {
+  static bool erroLigado = false;
   
-  //Ré
-  tone(pino_buzzer, notaRe, 300);//Frequência e duração da nota Ré
-  digitalWrite(led_azul, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
+  if (!erroLigado) {
+    tone(PINO_BUZZER, SOM_ERRO);
+    for (int i = 0; i < totalLeds; i++) digitalWrite(leds[i], HIGH);
+    erroLigado = true;
+    tempoAnterior = tempoAtual;
+  } else if (tempoAtual - tempoAnterior >= 1000) {
+    noTone(PINO_BUZZER);
+    for (int i = 0; i < totalLeds; i++) digitalWrite(leds[i], LOW);
+    erroLigado = false;
+    modo = 'i';
+  }
+}
 
-  //Mi
-  tone(pino_buzzer, notaMi, 300);//Frequência e duração da nota Mi
-  digitalWrite(led_vermelho, HIGH);
+void desligarLeds() {
+  for (int i = 0; i < totalLeds; i++) {
+    digitalWrite(leds[i], LOW);
+  }
+}
+
+// Animação de entrada fluida e não-bloqueante usando millis()
+void executarAnimacaoInicio(unsigned long tempoAtual) {
+  const int duracaoNota = 250;
   
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
+  if (tempoAtual - tempoAnimacao >= duracaoNota) {
+    tempoAnimacao = tempoAtual;
+    desligarLeds();
+    noTone(PINO_BUZZER);
 
-  //Fá
-  tone(pino_buzzer, notaFa, 300);//Frequência e duração da nota Fá
-  digitalWrite(led_amarelo, HIGH);
-
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Fá Fá
-  for (int a = 0; a < 2; a++) {
-    tone(pino_buzzer, notaFa, 200);//Frequência e duração da nota Fá
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
+    switch (passoAnimacao) {
+      case 0: tone(PINO_BUZZER, NOTA_DO); digitalWrite(LED_VERDE, HIGH); break;
+      case 1: tone(PINO_BUZZER, NOTA_RE); digitalWrite(LED_AZUL, HIGH); break;
+      case 2: tone(PINO_BUZZER, NOTA_MI); digitalWrite(LED_VERMELHO, HIGH); break;
+      case 3: tone(PINO_BUZZER, NOTA_FA); digitalWrite(LED_AMARELO, HIGH); break;
+      case 4: 
+      case 5: tone(PINO_BUZZER, NOTA_FA); for(int i=0; i<4; i++) digitalWrite(leds[i], HIGH); break;
+      case 6: tone(PINO_BUZZER, NOTA_SOL); digitalWrite(LED_VERMELHO, HIGH); break;
+      default: passoAnimacao = -1; break;
     }
-    delay(300);//Intervalo de 300 milissegundos
-    noTone(pino_buzzer);
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], LOW);
-    }
-  }
-
-  //Dó
-  tone(pino_buzzer, notaDo, 300);//Frequência e duração da nota Dó
-  digitalWrite(led_verde, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-  digitalWrite(led_verde, LOW);
-
-  //Ré
-  tone(pino_buzzer, notaRe, 300);//Frequência e duração da nota Ré
-  digitalWrite(led_azul, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-  digitalWrite(led_azul, LOW);
-
-  //Dó
-  tone(pino_buzzer, notaDo, 300);//Frequência e duração da nota Dó
-  digitalWrite(led_verde, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-  digitalWrite(led_verde, LOW);
-
-  //Ré
-  tone(pino_buzzer, notaRe, 300);//Frequência e duração da nota Ré
-  digitalWrite(led_azul, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-  digitalWrite(led_azul, LOW);
-
-  //Ré Ré
-  for (int b = 0; b < 2; b++) {
-    tone(pino_buzzer, notaRe, 200);//Frequência e duração da nota Ré
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
-    }
-    delay(300);//Intervalo de 300 milissegundos
-    noTone(pino_buzzer);
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], LOW);
-    }
-  }
-
-  //Dó
-  tone(pino_buzzer, notaDo, 300);//Frequência e duração da nota Dó
-  digitalWrite(led_amarelo, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Sol
-  tone(pino_buzzer, notaSol, 300);//Frequência e duração da nota Sol
-  digitalWrite(led_vermelho, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Fa
-  tone(pino_buzzer, notaFa, 300);//Frequência e duração da nota Fá
-  digitalWrite(led_azul, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Mi
-  tone(pino_buzzer, notaMi, 300);//Frequência e duração da nota Fá
-  digitalWrite(led_verde, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Mi Mi
-  for (int c = 0; c < 2; c++) {
-    tone(pino_buzzer, notaMi, 200);//Frequência e duração da nota Mi
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
-    }
-    delay(300);//Intervalo de 300 milissegundos
-    noTone(pino_buzzer);
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], LOW);
-    }
-  }
-
-  //Dó
-  tone(pino_buzzer, notaDo, 300);//Frequência e duração da nota Dó
-  digitalWrite(led_verde, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Ré
-  tone(pino_buzzer, notaRe, 300);//Frequência e duração da nota Ré
-  digitalWrite(led_azul, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Mi
-  tone(pino_buzzer, notaMi, 300);//Frequência e duração da nota Mi
-  digitalWrite(led_vermelho, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  //Fa
-  tone(pino_buzzer, notaFa, 300);//Frequência e duração da nota Fá
-  digitalWrite(led_amarelo, HIGH);
-  delay(200);//Intervalo de 200 milissegundos
-  noTone(pino_buzzer);
-
-  for (int d = 0; d < 2; d++) {
-    tone(pino_buzzer, notaFa, 200);//Frequência e duração da nota Fá
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], HIGH);
-    }
-    delay(300);//Intervalo de 300 milissegundos
-    noTone(pino_buzzer);
-    for(int i = 0; i < total_leds; i++) {
-    	digitalWrite(leds[i], LOW);
-    }
+    passoAnimacao++;
   }
 }
